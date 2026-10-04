@@ -1,0 +1,44 @@
+openapi: 3.1.0
+info:
+  title: Billing POS Identity Data Service API
+  version: 1.0.0-review
+  description: Internal-only persistence contract. The Identity Service is the sole caller. This service is the only Identity-domain service permitted to access MongoDB; it must not apply login, role, lockout or subscription business rules.
+servers:
+  - url: http://identity-data-service.internal
+tags:
+  - name: Internal identity persistence
+paths:
+  /internal/v1/identities/login-records:lookup:
+    post:
+      tags: [Internal identity persistence]
+      summary: Retrieve a login record for business validation
+      operationId: lookupLoginRecord
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, userType]
+              properties:
+                identifier: { type: string }
+                shopCode: { type: string }
+                userType: { type: string, enum: [OWNER, STAFF] }
+      responses:
+        '200': { description: Credential and session record returned to Identity Service only }
+        '404': { description: No matching active login record }
+  /internal/v1/sessions:replace:
+    post:
+      tags: [Internal identity persistence]
+      summary: Persist a session and revoke earlier sessions for the same user
+      operationId: replaceUserSessions
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Session state persisted }
+components:
+  securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Internal service JWT
