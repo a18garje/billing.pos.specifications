@@ -1,0 +1,469 @@
+openapi: 3.1.0
+info:
+  title: Billing POS Identity and Access Service API
+  version: 1.0.0-review
+  description: |
+    Review draft for the Spring Boot Identity and Access Service. The service owns owner and staff credentials,
+    password and 3 digit PIN verification, access tokens, staff role assignments, internal device sessions,
+    credential recovery, and account lockout. A successful login revokes every prior session for the same user.
+    Access tokens contain a session ID and the API Gateway checks its active status, so the earlier device
+    receives 401 on its next authenticated request as well as on token refresh.
+    It does not decide whether a shop can create a bill; that is owned by the
+    Tenant Subscription Service. Login responses include a subscription snapshot only so Flutter can present
+    the correct active, grace, expired, or suspended experience.
+servers:
+  - url: https://api.example.com/identity
+    description: API Gateway production route
+  - url: https://staging-api.example.com/identity
+    description: API Gateway staging route
+tags:
+  - name: Authentication
+  - name: Session
+  - name: Current user
+  - name: Staff administration
+paths:
+  /v1/auth/owner/login:
+    post:
+      tags: [Authentication]
+      summary: Log in a shop owner
+      description: Authenticates an owner with registered mobile number or email and password. A successful response includes role, tenant context and a subscription snapshot. The owner may log in during expired subscription state but the business APIs remain read only.
+      operationId: ownerLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerLoginRequest'
+      responses:
+        '200':
+          description: Owner authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '423':
+          $ref: '#/components/responses/AccountLocked'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/auth/staff/login:
+    post:
+      tags: [Authentication]
+      summary: Log in a shop staff member
+      description: Authenticates a staff member using shop code, staff username, password and exactly three digit PIN. The service checks staff active state and lockout. PINs are never logged, returned, or stored in plaintext.
+      operationId: staffLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StaffLoginRequest'
+      responses:
+        '200':
+          description: Staff authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '403':
+          $ref: '#/components/responses/StaffInactive'
+        '423':
+          $ref: '#/components/responses/AccountLocked'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/auth/refresh:
+    post:
+      tags: [Session]
+      summary: Rotate refresh token and issue a new access token
+      operationId: refreshSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Session rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefreshResponse'
+        '401':
+          $ref: '#/components/responses/InvalidRefreshToken'
+  /v1/auth/logout:
+    post:
+      tags: [Session]
+      summary: Revoke current device session
+      operationId: logout
+      responses:
+        '204':
+          description: Session revoked
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+      security:
+        - bearerAuth: []
+  /v1/auth/password-reset/requests:
+    post:
+      tags: [Authentication]
+      summary: Start password reset
+      description: Sends a reset challenge to the registered owner or staff mobile. Always returns 202 to avoid account enumeration.
+      operationId: requestPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '202':
+          description: Reset request accepted
+  /v1/auth/password-reset/confirmations:
+    post:
+      tags: [Authentication]
+      summary: Complete password reset
+      operationId: confirmPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmation'
+      responses:
+        '204':
+          description: Password changed and previous sessions revoked
+        '400':
+          $ref: '#/components/responses/InvalidResetChallenge'
+  /v1/me:
+    get:
+      tags: [Current user]
+      summary: Get current user profile permissions and subscription snapshot
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current authenticated principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+      security:
+        - bearerAuth: []
+  /v1/staff:
+    get:
+      tags: [Staff administration]
+      summary: List staff members for current tenant
+      operationId: listStaff
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/StaffStatus'
+      responses:
+        '200':
+          description: Staff page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+        - bearerAuth: []
+    post:
+      tags: [Staff administration]
+      summary: Create staff user
+      description: Owner or permitted manager creates a staff profile, password and 3 digit PIN. The service hashes both credentials and publishes staff.created.
+      operationId: createStaff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStaffRequest'
+      responses:
+        '201':
+          description: Staff user created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffUser'
+        '409':
+          $ref: '#/components/responses/StaffUsernameAlreadyExists'
+      security:
+        - bearerAuth: []
+  /v1/staff/{staffId}:
+    get:
+      tags: [Staff administration]
+      summary: Get staff user
+      operationId: getStaff
+      parameters:
+        - $ref: '#/components/parameters/StaffId'
+      responses:
+        '200':
+          description: Staff profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffUser'
+        '404':
+          $ref: '#/components/responses/StaffNotFound'
+      security:
+        - bearerAuth: []
+    patch:
+      tags: [Staff administration]
+      summary: Update staff profile permissions or active status
+      description: Updates allowed permissions, discount limit, display name, mobile number and active state. Deactivating staff revokes active sessions.
+      operationId: updateStaff
+      parameters:
+        - $ref: '#/components/parameters/StaffId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStaffRequest'
+      responses:
+        '200':
+          description: Updated staff user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffUser'
+        '404':
+          $ref: '#/components/responses/StaffNotFound'
+      security:
+        - bearerAuth: []
+  /v1/staff/{staffId}/credentials:
+    put:
+      tags: [Staff administration]
+      summary: Reset staff password and 3 digit PIN
+      description: Owner or permitted manager sets replacement credentials. The service revokes existing staff sessions and clears account lockout.
+      operationId: resetStaffCredentials
+      parameters:
+        - $ref: '#/components/parameters/StaffId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceStaffCredentialsRequest'
+      responses:
+        '204':
+          description: Credentials replaced and sessions revoked
+        '404':
+          $ref: '#/components/responses/StaffNotFound'
+      security:
+        - bearerAuth: []
+  /v1/staff/{staffId}/unlock:
+    post:
+      tags: [Staff administration]
+      summary: Clear staff account lockout
+      operationId: unlockStaff
+      parameters:
+        - $ref: '#/components/parameters/StaffId'
+      responses:
+        '204':
+          description: Lockout cleared
+        '404':
+          $ref: '#/components/responses/StaffNotFound'
+      security:
+        - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    StaffId:
+      name: staffId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    StaffStatus:
+      name: status
+      in: query
+      schema: { type: string, enum: [ACTIVE, INACTIVE, LOCKED] }
+  responses:
+    Unauthenticated:
+      description: Missing invalid or expired access token
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    InvalidCredentials:
+      description: User identifier password or PIN is incorrect
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' }, example: { code: INVALID_CREDENTIALS, message: Invalid login credentials, correlationId: 9edfcf88-97ba-453f-bf0a-6ce0e80dff16 } } }
+    AccountLocked:
+      description: Login temporarily locked after repeated failure
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' }, example: { code: ACCOUNT_LOCKED, message: Account is temporarily locked, retryAfterSeconds: 900 } } }
+    StaffInactive:
+      description: Staff profile is inactive
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    RateLimited:
+      description: Too many requests
+      headers: { Retry-After: { schema: { type: integer } } }
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    InvalidRefreshToken:
+      description: Refresh token invalid expired revoked or reused
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    InvalidResetChallenge:
+      description: Reset code invalid expired or already used
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    Forbidden:
+      description: Authenticated actor lacks required permission
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    StaffNotFound:
+      description: Staff ID does not exist in tenant
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+    StaffUsernameAlreadyExists:
+      description: Staff username exists for tenant
+      content: { application/json: { schema: { $ref: '../common/common.yaml#/components/schemas/ErrorResponse' } } }
+  schemas:
+    OwnerLoginRequest:
+      type: object
+      required: [identifier, password, deviceInstallationId]
+      properties:
+        identifier: { type: string, description: Registered mobile number or email }
+        password: { type: string, format: password, minLength: 8 }
+        deviceInstallationId: { type: string, format: uuid, description: App generated random installation identifier used only for internal session replacement. }
+    StaffLoginRequest:
+      type: object
+      required: [shopCode, username, password, pin, deviceInstallationId]
+      properties:
+        shopCode: { type: string, example: SFP-IND-000123 }
+        username: { type: string, example: rakesh }
+        password: { type: string, format: password, minLength: 8 }
+        pin: { type: string, pattern: '^\\d{3}$', writeOnly: true, example: '123' }
+        deviceInstallationId: { type: string, format: uuid, description: App generated random installation identifier used only for internal session replacement. }
+    RefreshTokenRequest:
+      type: object
+      required: [refreshToken, deviceInstallationId]
+      properties:
+        refreshToken: { type: string, writeOnly: true }
+        deviceInstallationId: { type: string, format: uuid }
+    PasswordResetRequest:
+      type: object
+      required: [identifier, userType]
+      properties:
+        identifier: { type: string, description: Registered mobile number or email }
+        userType: { type: string, enum: [OWNER, STAFF] }
+        shopCode: { type: string, description: Required when resetting staff credentials }
+    PasswordResetConfirmation:
+      type: object
+      required: [resetToken, verificationCode, newPassword]
+      properties:
+        resetToken: { type: string, writeOnly: true }
+        verificationCode: { type: string, pattern: '^\\d{6}$', writeOnly: true }
+        newPassword: { type: string, format: password, minLength: 8 }
+    AuthenticationResponse:
+      allOf:
+        - $ref: '#/components/schemas/TokenRefreshResponse'
+        - type: object
+          required: [user, subscription]
+          properties:
+            user: { $ref: '#/components/schemas/UserContext' }
+            subscription: { $ref: '#/components/schemas/SubscriptionSnapshot' }
+    TokenRefreshResponse:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresIn]
+      properties:
+        accessToken: { type: string, readOnly: true }
+        refreshToken: { type: string, readOnly: true }
+        tokenType: { type: string, const: Bearer }
+        expiresIn: { type: integer, description: Access token TTL in seconds, example: 900 }
+    CurrentUserResponse:
+      type: object
+      required: [user, subscription]
+      properties:
+        user: { $ref: '#/components/schemas/UserContext' }
+        subscription: { $ref: '#/components/schemas/SubscriptionSnapshot' }
+    UserContext:
+      type: object
+      required: [id, tenantId, shopId, displayName, role, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        shopId: { type: string, format: uuid }
+        displayName: { type: string, example: Rakesh Kumar }
+        role: { type: string, enum: [OWNER, STAFF, PLATFORM_ADMIN, PLATFORM_SUPPORT] }
+        permissions:
+          type: array
+          items: { type: string, example: BILL_CREATE }
+        discountLimitPercent: { type: number, minimum: 0, maximum: 100, example: 10 }
+    SubscriptionSnapshot:
+      type: object
+      required: [status, entitledUntil, readOnly]
+      properties:
+        status: { type: string, enum: [TRIAL, ACTIVE, GRACE, EXPIRED, SUSPENDED] }
+        entitledUntil: { type: string, format: date-time }
+        graceEndsAt: { type: string, format: date-time }
+        readOnly: { type: boolean, description: True for expired tenant; UI must still rely on protected service response for writes. }
+    CreateStaffRequest:
+      type: object
+      required: [displayName, username, password, pin, permissions]
+      properties:
+        displayName: { type: string, minLength: 2, maxLength: 100 }
+        username: { type: string, pattern: '^[a-zA-Z0-9._-]{3,40}$' }
+        mobile: { type: string, pattern: '^\\+?[1-9]\\d{7,14}$' }
+        password: { type: string, format: password, minLength: 8, writeOnly: true }
+        pin: { type: string, pattern: '^\\d{3}$', writeOnly: true }
+        permissions:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [BILL_CREATE, BILL_HOLD, BILL_RETURN, DISCOUNT_APPLY, CREDIT_CREATE, CUSTOMER_VIEW, INVENTORY_VIEW] }
+        discountLimitPercent: { type: number, minimum: 0, maximum: 100 }
+    UpdateStaffRequest:
+      type: object
+      minProperties: 1
+      properties:
+        displayName: { type: string, minLength: 2, maxLength: 100 }
+        mobile: { type: string, pattern: '^\\+?[1-9]\\d{7,14}$' }
+        active: { type: boolean }
+        permissions:
+          type: array
+          items: { type: string, enum: [BILL_CREATE, BILL_HOLD, BILL_RETURN, DISCOUNT_APPLY, CREDIT_CREATE, CUSTOMER_VIEW, INVENTORY_VIEW] }
+        discountLimitPercent: { type: number, minimum: 0, maximum: 100 }
+    ReplaceStaffCredentialsRequest:
+      type: object
+      required: [password, pin]
+      properties:
+        password: { type: string, format: password, minLength: 8, writeOnly: true }
+        pin: { type: string, pattern: '^\\d{3}$', writeOnly: true }
+    StaffUser:
+      type: object
+      required: [id, tenantId, displayName, username, active, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        displayName: { type: string }
+        username: { type: string }
+        mobile: { type: string }
+        active: { type: boolean }
+        lockedUntil: { type: string, format: date-time }
+        permissions: { type: array, items: { type: string } }
+        discountLimitPercent: { type: number }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    StaffPage:
+      type: object
+      required: [content, page, pageSize, totalElements]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/StaffUser' } }
+        page: { type: integer }
+        pageSize: { type: integer }
+        totalElements: { type: integer }
